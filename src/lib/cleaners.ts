@@ -79,6 +79,66 @@ export const updateCleaner = createServerFn({ method: "POST" })
     return { ...r, created_at: String(r.created_at) } as Cleaner;
   });
 
+// ── Monthly stats for cleaner tooltips ────────────────────────────
+
+export interface CleanerMonthlyStats {
+  total_jobs: number;
+  on_time: number;
+  no_shows: number;
+  on_time_pct: number;
+}
+
+export const getCleanerMonthlyStats = createServerFn({ method: "GET" })
+  .validator((cleanerId: string) => cleanerId)
+  .handler(async ({ data: cleanerId }): Promise<CleanerMonthlyStats | null> => {
+    const rows = await sql()`
+      SELECT
+        COUNT(*)::int AS total_jobs,
+        COUNT(*) FILTER (WHERE al.status = 'ontime')::int AS on_time,
+        COUNT(*) FILTER (WHERE al.status = 'no_show')::int AS no_shows
+      FROM attendance_logs al
+      JOIN jobs j ON j.id = al.job_id
+      WHERE al.cleaner_id = ${cleanerId}
+        AND j.scheduled_date >= CURRENT_DATE - INTERVAL '30 days'
+    `;
+    if (rows.length === 0 || rows[0].total_jobs === 0) return null;
+    const r = rows[0];
+    return {
+      total_jobs: Number(r.total_jobs),
+      on_time: Number(r.on_time),
+      no_shows: Number(r.no_shows),
+      on_time_pct: Math.round((Number(r.on_time) / Number(r.total_jobs)) * 100),
+    };
+  });
+
+// ── Bulk monthly stats (for cleaner list tooltips) ─────────────────
+
+export const getAllCleanersMonthlyStats = createServerFn({ method: "GET" }).handler(async () => {
+  const rows = await sql()`
+    SELECT
+      c.id AS cleaner_id,
+      COUNT(al.id)::int AS total_jobs,
+      COUNT(al.id) FILTER (WHERE al.status = 'ontime')::int AS on_time,
+      COUNT(al.id) FILTER (WHERE al.status = 'no_show')::int AS no_shows
+    FROM cleaners c
+    LEFT JOIN attendance_logs al ON al.cleaner_id = c.id
+    LEFT JOIN jobs j ON j.id = al.job_id AND j.scheduled_date >= CURRENT_DATE - INTERVAL '30 days'
+    WHERE c.is_active = true
+    GROUP BY c.id
+  `;
+  const result: Record<string, CleanerMonthlyStats> = {};
+  for (const r of rows) {
+    const total = Number(r.total_jobs);
+    result[String(r.cleaner_id)] = {
+      total_jobs: total,
+      on_time: Number(r.on_time),
+      no_shows: Number(r.no_shows),
+      on_time_pct: total > 0 ? Math.round((Number(r.on_time) / total) * 100) : 0,
+    };
+  }
+  return result;
+});
+
 // ── Toggle cleaner active status ─────────────────────────────────
 
 export const toggleCleanerActive = createServerFn({ method: "POST" })

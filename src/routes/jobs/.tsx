@@ -15,11 +15,11 @@ export const Route = createFileRoute("/jobs/$jobId")({
 });
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-700",
-  confirmed: "bg-green-100 text-green-700",
-  in_progress: "bg-indigo-100 text-indigo-700",
-  completed: "bg-gray-100 text-gray-700",
-  no_show: "bg-red-100 text-red-700",
+  pending: "bg-amber-500 text-white",
+  confirmed: "bg-green-600 text-white",
+  in_progress: "bg-indigo-600 text-white",
+  completed: "bg-slate-600 text-white",
+  no_show: "bg-red-600 text-white",
 };
 
 function JobDetail() {
