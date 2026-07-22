@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { sql } from "~/db";
+import { sql, query } from "~/db";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -11,10 +11,15 @@ export interface Job {
   scheduled_time: string;
   location: string;
   assigned_cleaner_id: string | null;
-  status: "pending" | "confirmed" | "in_progress" | "completed" | "no_show";
+  status: "pending" | "confirmed" | "in_progress" | "completed" | "no_show" | "high_risk";
   backup_cleaner_id: string | null;
   backup_deployed_at: string | null;
   notes: string | null;
+  client_name: string | null;
+  client_phone: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofence_radius: number | null;
   created_at: string;
   // Joined fields
   cleaner_name?: string | null;
@@ -31,6 +36,11 @@ export interface JobInput {
   location: string;
   assigned_cleaner_id?: string;
   notes?: string;
+  client_name?: string;
+  client_phone?: string;
+  latitude?: number;
+  longitude?: number;
+  geofence_radius?: number;
 }
 
 // Base query fragment used as raw SQL string for composition
@@ -59,6 +69,11 @@ function mapJob(row: Record<string, unknown>): Job {
     backup_cleaner_id: row.backup_cleaner_id ? String(row.backup_cleaner_id) : null,
     backup_deployed_at: row.backup_deployed_at ? String(row.backup_deployed_at) : null,
     notes: row.notes ? String(row.notes) : null,
+    client_name: row.client_name ? String(row.client_name) : null,
+    client_phone: row.client_phone ? String(row.client_phone) : null,
+    latitude: row.latitude != null ? Number(row.latitude) : null,
+    longitude: row.longitude != null ? Number(row.longitude) : null,
+    geofence_radius: row.geofence_radius != null ? Number(row.geofence_radius) : null,
     created_at: String(row.created_at),
     cleaner_name: row.cleaner_name ? String(row.cleaner_name) : null,
     backup_cleaner_name: row.backup_cleaner_name ? String(row.backup_cleaner_name) : null,
@@ -72,33 +87,31 @@ function mapJob(row: Record<string, unknown>): Job {
 export const listJobs = createServerFn({ method: "GET" })
   .validator((filter?: { status?: string; date?: string }) => filter ?? {})
   .handler(async ({ data: filter }) => {
-    const db = sql();
-    let query = `${JOB_SELECT_SQL}`;
+    let sqlStr = `${JOB_SELECT_SQL}`;
     const params: (string | number)[] = [];
     let paramIdx = 1;
 
     if (filter.status && filter.status !== "all") {
-      query += ` WHERE j.status = ${paramIdx++}`;
+      sqlStr += ` WHERE j.status = ${paramIdx++}`;
       params.push(filter.status);
       if (filter.date) {
-        query += ` AND j.scheduled_date = ${paramIdx++}`;
+        sqlStr += ` AND j.scheduled_date = ${paramIdx++}`;
         params.push(filter.date);
       }
     } else if (filter.date) {
-      query += ` WHERE j.scheduled_date = ${paramIdx++}`;
+      sqlStr += ` WHERE j.scheduled_date = ${paramIdx++}`;
       params.push(filter.date);
     }
 
-    query += " ORDER BY j.scheduled_date DESC, j.scheduled_time ASC";
-    const rows = await db(query, params);
+    sqlStr += " ORDER BY j.scheduled_date DESC, j.scheduled_time ASC";
+    const rows = await query(sqlStr, params);
     return rows.map(mapJob);
   });
 
 // ── Get today's jobs ─────────────────────────────────────────────
 
 export const getTodaysJobs = createServerFn({ method: "GET" }).handler(async (): Promise<Job[]> => {
-  const db = sql();
-  const rows = await db(
+  const rows = await query(
     `${JOB_SELECT_SQL} WHERE j.scheduled_date = CURRENT_DATE ORDER BY j.scheduled_time ASC`
   );
   return rows.map(mapJob);
@@ -109,8 +122,7 @@ export const getTodaysJobs = createServerFn({ method: "GET" }).handler(async ():
 export const getJob = createServerFn({ method: "GET" })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<Job | null> => {
-    const db = sql();
-    const rows = await db(`${JOB_SELECT_SQL} WHERE j.id = $1`, [id]);
+    const rows = await query(`${JOB_SELECT_SQL} WHERE j.id = $1`, [id]);
     if (rows.length === 0) return null;
     return mapJob(rows[0]);
   });
@@ -121,9 +133,12 @@ export const createJob = createServerFn({ method: "POST" })
   .validator((input: JobInput) => input)
   .handler(async ({ data }) => {
     const rows = await sql()`
-      INSERT INTO jobs (title, description, scheduled_date, scheduled_time, location, assigned_cleaner_id, notes)
+      INSERT INTO jobs (title, description, scheduled_date, scheduled_time, location, assigned_cleaner_id, notes,
+        client_name, client_phone, latitude, longitude, geofence_radius)
       VALUES (${data.title}, ${data.description ?? null}, ${data.scheduled_date},
-              ${data.scheduled_time}, ${data.location}, ${data.assigned_cleaner_id ?? null}, ${data.notes ?? null})
+              ${data.scheduled_time}, ${data.location}, ${data.assigned_cleaner_id ?? null}, ${data.notes ?? null},
+              ${data.client_name ?? null}, ${data.client_phone ?? null}, ${data.latitude ?? null},
+              ${data.longitude ?? null}, ${data.geofence_radius ?? null})
       RETURNING *
     `;
 
@@ -326,6 +341,137 @@ export const completeJob = createServerFn({ method: "POST" })
     return { success: true };
   });
 
+// ── Pre-flight reminder (2 hours before job) ────────────────────
+
+export const sendPreFlightReminder = createServerFn({ method: "POST" })
+  .validator((input: { job_id: string }) => input)
+  .handler(async ({ data }) => {
+    const db = sql();
+    const jobRows = await query(`${JOB_SELECT_SQL} WHERE j.id = $1`, [data.job_id]);
+    if (jobRows.length === 0) return { sent: false, reason: "Job not found" };
+    const job = mapJob(jobRows[0]);
+    if (job.status !== "pending" || !job.assigned_cleaner_id) return { sent: false, reason: "Not pending" };
+
+    const now = new Date();
+    const sched = new Date(`${job.scheduled_date}T${job.scheduled_time}`);
+    const preWindow = new Date(sched.getTime() - 2 * 60 * 60 * 1000);
+    if (now < preWindow || now > sched) return { sent: false, reason: "Not in pre-flight window" };
+
+    const cleaners = await db`SELECT phone FROM cleaners WHERE id = ${job.assigned_cleaner_id}`;
+    if (!cleaners[0]?.phone) return { sent: false, reason: "No phone" };
+
+    await db`UPDATE attendance_logs SET pre_flight_sent_at = now() WHERE job_id = ${data.job_id} AND cleaner_id = ${job.assigned_cleaner_id}`;
+
+    try {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const token = process.env.TWILIO_AUTH_TOKEN;
+      const from = process.env.TWILIO_PHONE_NUMBER;
+      if (!sid || !token || !from) return { sent: false, reason: "Twilio not configured" };
+      const { Twilio } = require("twilio") as typeof import("twilio");
+      const client = new Twilio(sid, token);
+      await client.messages.create({
+        body: `ShowUp Pre-Flight: "${job.title}" at ${job.scheduled_time.slice(0,5)} today, ${job.location}. Reply YES to confirm you are on track, or NO if you cannot make it.`,
+        from, to: String(cleaners[0].phone),
+      });
+      return { sent: true };
+    } catch (e) {
+      return { sent: false, reason: String(e) };
+    }
+  });
+
+// ── Confirm pre-flight ───────────────────────────────────────────
+
+export const confirmPreFlight = createServerFn({ method: "POST" })
+  .validator((input: { job_id: string; cleaner_id: string }) => input)
+  .handler(async ({ data }) => {
+    await sql()`UPDATE attendance_logs SET pre_flight_confirmed = true WHERE job_id = ${data.job_id} AND cleaner_id = ${data.cleaner_id}`;
+    return { success: true };
+  });
+
+// ── Broadcast backup to multiple cleaners ────────────────────────
+
+export const broadcastBackup = createServerFn({ method: "POST" })
+  .validator((input: { job_id: string }) => input)
+  .handler(async ({ data }) => {
+    const db = sql();
+    const jobRows = await db`SELECT * FROM jobs WHERE id = ${data.job_id}`;
+    if (jobRows.length === 0) throw new Error("Job not found");
+    const job = jobRows[0];
+    const cleaners = await db`SELECT id, name, phone FROM cleaners WHERE is_active = true AND id != ${job.assigned_cleaner_id || ""} ORDER BY reliability_score DESC LIMIT 5`;
+    const settings = await db`SELECT points_per_backup FROM owner_settings LIMIT 1`;
+    const pts = settings[0]?.points_per_backup || 25;
+    let notified = 0;
+    for (const c of cleaners) {
+      if (!c.phone) continue;
+      try {
+        const sid = process.env.TWILIO_ACCOUNT_SID;
+        const token = process.env.TWILIO_AUTH_TOKEN;
+        const from = process.env.TWILIO_PHONE_NUMBER;
+        if (sid && token && from) {
+          const { Twilio } = require("twilio") as typeof import("twilio");
+          const client = new Twilio(sid, token);
+          await client.messages.create({
+            body: `ShowUp Open Shift: "${job.title}" at ${String(job.scheduled_time).slice(0,5)}, ${job.location}. +${pts} bonus points. Reply YES to take this shift.`,
+            from, to: String(c.phone),
+          });
+          notified++;
+        }
+      } catch (_) {}
+    }
+    return { success: true, notified, total: cleaners.length };
+  });
+
+// ── Report access blocked ────────────────────────────────────────
+
+export const reportAccessBlocked = createServerFn({ method: "POST" })
+  .validator((input: { job_id: string; cleaner_id: string }) => input)
+  .handler(async ({ data }) => {
+    const db = sql();
+    const jobRows = await db`SELECT j.title, j.location, c.name AS cleaner_name FROM jobs j JOIN cleaners c ON c.id = ${data.cleaner_id} WHERE j.id = ${data.job_id}`;
+    if (jobRows.length === 0) return { success: false };
+    const j = jobRows[0];
+    try {
+      const settings = await db`SELECT owner_phone FROM owner_settings LIMIT 1`;
+      if (settings[0]?.owner_phone) {
+        const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_PHONE_NUMBER;
+        if (sid && token && from) {
+          const { Twilio } = require("twilio") as typeof import("twilio");
+          await new Twilio(sid, token).messages.create({
+            body: `🚨 ACCESS BLOCKED: ${j.cleaner_name} at "${j.title}" cannot get into ${j.location}. Client code needed.`,
+            from, to: String(settings[0].owner_phone),
+          });
+        }
+      }
+    } catch (_) {}
+    return { success: true };
+  });
+
+// ── Client delay notification ────────────────────────────────────
+
+export const sendClientDelayNotification = createServerFn({ method: "POST" })
+  .validator((input: { job_id: string }) => input)
+  .handler(async ({ data }) => {
+    const db = sql();
+    const jobRows = await db`SELECT client_phone, client_name, title, scheduled_time FROM jobs WHERE id = ${data.job_id}`;
+    if (jobRows.length === 0 || !jobRows[0].client_phone) return { sent: false };
+    const j = jobRows[0];
+    const now = new Date();
+    const sched = new Date(`${(new Date()).toISOString().slice(0,10)}T${j.scheduled_time}`);
+    if (now < new Date(sched.getTime() + 15 * 60 * 1000)) return { sent: false };
+    try {
+      const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN, from = process.env.TWILIO_PHONE_NUMBER;
+      if (sid && token && from) {
+        const { Twilio } = require("twilio") as typeof import("twilio");
+        await new Twilio(sid, token).messages.create({
+          body: `ShowUp Update: Your cleaner for "${j.title}" is slightly delayed. They are en route and will arrive shortly. We will notify you when they are on-site.`,
+          from, to: String(j.client_phone),
+        });
+        return { sent: true };
+      }
+    } catch (_) {}
+    return { sent: false };
+  });
+
 // ── Auto-process job (no-show detection + backup deployment) ─────
 
 export const autoProcessJob = createServerFn({ method: "POST" })
@@ -334,7 +480,7 @@ export const autoProcessJob = createServerFn({ method: "POST" })
     const db = sql();
 
     // Get the job with attendance info
-    const jobRows = await db(`${JOB_SELECT_SQL} WHERE j.id = $1`, [data.job_id]);
+    const jobRows = await query(`${JOB_SELECT_SQL} WHERE j.id = $1`, [data.job_id]);
     if (jobRows.length === 0) throw new Error("Job not found");
     const job = mapJob(jobRows[0]);
 
@@ -456,7 +602,7 @@ export const sendJobReminders = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const db = sql();
 
-    const jobRows = await db(`${JOB_SELECT_SQL} WHERE j.id = $1`, [data.job_id]);
+    const jobRows = await query(`${JOB_SELECT_SQL} WHERE j.id = $1`, [data.job_id]);
     if (jobRows.length === 0) return { sent: false, reason: "Job not found" };
     const job = mapJob(jobRows[0]);
 
@@ -513,12 +659,27 @@ export const runJobAutomations = createServerFn({ method: "POST" })
   .validator((input: { job_id: string }) => input)
   .handler(async ({ data }) => {
     // Run both auto-process and SMS reminder in parallel
-    const [autoResult, reminderResult] = await Promise.all([
+    const [autoResult, reminderResult, preFlightResult, clientDelayResult] = await Promise.all([
       autoProcessJob({ data: { job_id: data.job_id } }),
       sendJobReminders({ data: { job_id: data.job_id } }),
+      sendPreFlightReminder({ data: { job_id: data.job_id } }),
+      sendClientDelayNotification({ data: { job_id: data.job_id } }),
     ]);
 
-    return { auto: autoResult, reminder: reminderResult };
+    // After pre-flight window, if not confirmed, mark high_risk
+    const db = sql();
+    const alRows = await db`SELECT j.status, al.pre_flight_confirmed, al.pre_flight_sent_at FROM jobs j LEFT JOIN attendance_logs al ON al.job_id = j.id AND al.cleaner_id = j.assigned_cleaner_id WHERE j.id = ${data.job_id}`;
+    if (alRows.length > 0 && alRows[0].status === "pending" && alRows[0].pre_flight_sent_at && !alRows[0].pre_flight_confirmed) {
+      const schedRows = await db`SELECT scheduled_date, scheduled_time FROM jobs WHERE id = ${data.job_id}`;
+      if (schedRows.length > 0) {
+        const sched = new Date(`${schedRows[0].scheduled_date}T${schedRows[0].scheduled_time}`);
+        if (new Date() > sched) {
+          await db`UPDATE jobs SET status = 'high_risk' WHERE id = ${data.job_id}`;
+        }
+      }
+    }
+
+    return { auto: autoResult, reminder: reminderResult, preFlight: preFlightResult, clientDelay: clientDelayResult };
   });
 
 // ── Dashboard snapshot ───────────────────────────────────────────
@@ -531,6 +692,7 @@ export const getDashboardSnapshot = createServerFn({ method: "GET" }).handler(as
       COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
       COUNT(*) FILTER (WHERE status = 'in_progress')::int AS in_progress,
       COUNT(*) FILTER (WHERE status = 'no_show')::int AS no_show,
+      COUNT(*) FILTER (WHERE status = 'high_risk')::int AS high_risk,
       COUNT(*) FILTER (WHERE status = 'completed')::int AS completed
     FROM jobs WHERE scheduled_date = CURRENT_DATE
   `;
@@ -580,7 +742,8 @@ export const getDashboardSnapshot = createServerFn({ method: "GET" }).handler(as
   // Jobs needing attention: pending past their scheduled time + 30 min, or recently got backups
   const alerts = await sql()`
     SELECT j.id, j.title, j.status, j.backup_deployed_at,
-      c.name AS cleaner_name, bc.name AS backup_name
+      c.name AS cleaner_name, c.phone AS cleaner_phone, bc.name AS backup_name,
+      j.client_name, j.client_phone
     FROM jobs j
     LEFT JOIN cleaners c ON j.assigned_cleaner_id = c.id
     LEFT JOIN cleaners bc ON j.backup_cleaner_id = bc.id
@@ -590,12 +753,19 @@ export const getDashboardSnapshot = createServerFn({ method: "GET" }).handler(as
        AND (j.scheduled_date < CURRENT_DATE
             OR (j.scheduled_date = CURRENT_DATE AND j.scheduled_time < (CURRENT_TIME - INTERVAL '30 minutes'))))
       OR
+      -- High risk jobs (pre-flight not confirmed)
+      j.status = 'high_risk'
+      OR
       -- Jobs that recently got a backup deployed today
       (j.backup_deployed_at IS NOT NULL
        AND j.backup_deployed_at >= CURRENT_DATE
        AND j.status != 'completed')
     )
-    ORDER BY j.scheduled_date ASC, j.scheduled_time ASC
+    ORDER BY
+      CASE WHEN j.status = 'high_risk' THEN 0
+           WHEN j.status = 'no_show' THEN 1
+           ELSE 2 END,
+      j.scheduled_date ASC, j.scheduled_time ASC
     LIMIT 10
   `;
 
@@ -610,7 +780,10 @@ export const getDashboardSnapshot = createServerFn({ method: "GET" }).handler(as
       status: String(a.status),
       backup_deployed_at: a.backup_deployed_at ? String(a.backup_deployed_at) : null,
       cleaner_name: a.cleaner_name ? String(a.cleaner_name) : null,
+      cleaner_phone: a.cleaner_phone ? String(a.cleaner_phone) : null,
       backup_name: a.backup_name ? String(a.backup_name) : null,
+      client_name: a.client_name ? String(a.client_name) : null,
+      client_phone: a.client_phone ? String(a.client_phone) : null,
     })),
     attendanceRate:
       weekStats[0].total > 0

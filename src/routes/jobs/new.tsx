@@ -20,6 +20,11 @@ function NewJob() {
   const [location, setLocation] = useState("");
   const [assignedCleanerId, setAssignedCleanerId] = useState("");
   const [notes, setNotes] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [clientPhone, setClientPhone] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [geofenceRadius, setGeofenceRadius] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,6 +43,11 @@ function NewJob() {
           location: location.trim(),
           assigned_cleaner_id: assignedCleanerId || undefined,
           notes: notes.trim() || undefined,
+          client_name: clientName.trim() || undefined,
+          client_phone: clientPhone.trim() || undefined,
+          latitude: latitude ? parseFloat(latitude) : undefined,
+          longitude: longitude ? parseFloat(longitude) : undefined,
+          geofence_radius: geofenceRadius ? parseInt(geofenceRadius) : undefined,
         },
       });
       navigate({ to: "/jobs" });
@@ -121,6 +131,72 @@ function NewJob() {
             ))}
           </select>
         </div>
+
+        {/* Client info section */}
+        <fieldset className="border rounded-lg p-4 space-y-3">
+          <legend className="text-sm font-semibold text-gray-700 px-1">Client Info (optional)</legend>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Client Name</label>
+            <input
+              type="text"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              placeholder="Jane Smith"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Client Phone</label>
+            <input
+              type="tel"
+              value={clientPhone}
+              onChange={(e) => setClientPhone(e.target.value)}
+              placeholder="555-0123"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            />
+          </div>
+        </fieldset>
+
+        {/* Geofence section */}
+        <fieldset className="border rounded-lg p-4 space-y-3">
+          <legend className="text-sm font-semibold text-gray-700 px-1">Geofence (optional)</legend>
+          <p className="text-xs text-gray-400">Set job coordinates to verify cleaner is on-site when confirming.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Latitude</label>
+              <input
+                type="number"
+                step="any"
+                value={latitude}
+                onChange={(e) => setLatitude(e.target.value)}
+                placeholder="40.7128"
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Longitude</label>
+              <input
+                type="number"
+                step="any"
+                value={longitude}
+                onChange={(e) => setLongitude(e.target.value)}
+                placeholder="-74.0060"
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Geofence Radius (meters)</label>
+            <input
+              type="number"
+              value={geofenceRadius}
+              onChange={(e) => setGeofenceRadius(e.target.value)}
+              placeholder="500"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            />
+          </div>
+        </fieldset>
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
           <textarea

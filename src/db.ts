@@ -1,4 +1,32 @@
 import { neon } from "@neondatabase/serverless";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Module-level side-effect: Force load the correct DATABASE_URL from .env if present, to override system env defaults
+try {
+  const envPaths = [
+    join(import.meta.dirname, "..", ".env"),
+    join(process.cwd(), ".env"),
+    "/home/team/shared/site/.env"
+  ];
+  for (const envPath of envPaths) {
+    try {
+      const envContent = readFileSync(envPath, "utf8");
+      const match = envContent.match(/DATABASE_URL=(.+)/);
+      if (match) {
+        const dbUrl = match[1].trim();
+        if (dbUrl.startsWith("postgresql:") || dbUrl.startsWith("postgres:")) {
+          process.env.DATABASE_URL = dbUrl;
+          break;
+        }
+      }
+    } catch (e) {
+      // Continue trying next path
+    }
+  }
+} catch (e) {
+  // Ignore errors
+}
 
 /**
  * Server-only handle to the team's database (Neon serverless Postgres over HTTP).

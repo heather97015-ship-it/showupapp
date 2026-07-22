@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getDashboardSnapshot } from "~/lib/jobs";
+import { getDashboardSnapshot, deployBackup, sendJobReminders } from "~/lib/jobs";
 import { useState } from "react";
 
 export const Route = createFileRoute("/")({
@@ -9,23 +9,58 @@ export const Route = createFileRoute("/")({
 
 function Dashboard() {
   const data = Route.useLoaderData();
-  const { today, week, backups, cleanerDistribution, attendanceRate, backupSuccessRate, alerts } = data;
+  const { today, week, cleanerDistribution, attendanceRate, backupSuccessRate, alerts } = data;
+
+  const highRiskAlerts = (alerts ?? []).filter((a: any) => a.status === "high_risk");
+  const pendingAlerts = (alerts ?? []).filter((a: any) => a.status !== "high_risk");
+  const unconfirmed = (today?.pending ?? 0) + (today?.high_risk ?? 0);
+  const hasHighRisk = (today?.high_risk ?? 0) > 0;
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
       <h1 className="text-2xl font-bold">Dashboard</h1>
+
+      {/* Traffic-Light Banner */}
+      {hasHighRisk ? (
+        <div className="bg-orange-600 text-white rounded-xl px-5 py-3 text-center text-lg font-bold">
+          {"⚠️ "}{today?.high_risk ?? 0}{" Job"}{(today?.high_risk ?? 0) !== 1 ? "s" : ""}{" High Risk — Pre-Flight Not Confirmed"}
+        </div>
+      ) : unconfirmed > 0 ? (
+        <div className="bg-red-600 text-white rounded-xl px-5 py-3 text-center text-lg font-bold">
+          {"⚠️ "}{unconfirmed}{" Cleaner"}{unconfirmed !== 1 ? "s" : ""}{" Unconfirmed — Action Needed"}
+        </div>
+      ) : (today?.confirmed ?? 0) > 0 ? (
+        <div className="bg-green-600 text-white rounded-xl px-5 py-3 text-center text-lg font-bold">
+          {"✅ All "}{today?.confirmed}{" Job"}{(today?.confirmed ?? 0) !== 1 ? "s" : ""}{" On Track"}
+        </div>
+      ) : null}
+
+      {/* High Risk Alerts */}
+      {highRiskAlerts.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold text-orange-600 uppercase tracking-wide mb-3">
+            {"🚨 High Risk No-Show"}
+          </h2>
+          <div className="space-y-2">
+            {highRiskAlerts.map((alert: any) => (
+              <AlertCard key={alert.id} alert={alert} variant="high_risk" />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Today's Snapshot */}
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
           Today's Snapshot
         </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
           <StatCard label="Scheduled" value={today?.total ?? 0} color="blue" />
           <StatCard label="Confirmed" value={today?.confirmed ?? 0} color="green" />
           <StatCard label="Pending" value={today?.pending ?? 0} color="yellow" />
           <StatCard label="In Progress" value={today?.in_progress ?? 0} color="indigo" />
           <StatCard label="No-Shows" value={today?.no_show ?? 0} color="red" />
+          <StatCard label="High Risk" value={today?.high_risk ?? 0} color="orange" />
         </div>
       </section>
 
@@ -51,42 +86,15 @@ function Dashboard() {
         </div>
       </section>
 
-      {/* Alerts */}
-      {alerts && alerts.length > 0 && (
+      {/* Pending / Past-Deadline Alerts */}
+      {pendingAlerts.length > 0 && (
         <section>
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            ⚠ Needs Attention
+            {"⚠ Needs Attention"}
           </h2>
           <div className="space-y-2">
-            {alerts.map((alert: any) => (
-              <Link
-                key={alert.id}
-                to="/jobs/$jobId"
-                params={{ jobId: alert.id }}
-                className={`block rounded-xl border p-3 ${
-                  alert.backup_name
-                    ? "bg-orange-50 border-orange-200"
-                    : "bg-red-50 border-red-200"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium">{alert.title}</div>
-                    <div className="text-xs mt-0.5">
-                      {alert.backup_name ? (
-                        <span className="text-orange-700">
-                          🔄 Backup deployed: {alert.backup_name}
-                        </span>
-                      ) : (
-                        <span className="text-red-700">
-                          ⏰ Past deadline — {alert.cleaner_name || "Unassigned"} hasn't confirmed
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-xs text-gray-500">View →</span>
-                </div>
-              </Link>
+            {pendingAlerts.map((alert: any) => (
+              <AlertCard key={alert.id} alert={alert} variant={alert.backup_name ? "backup" : "pending"} />
             ))}
           </div>
         </section>
@@ -99,9 +107,9 @@ function Dashboard() {
         </h2>
         <div className="bg-white rounded-xl border p-4">
           <div className="flex gap-2 h-8 rounded-lg overflow-hidden">
-            {(cleanerDistribution ?? []).map((tier: { tier: string; count: number }) => {
+            {(cleanerDistribution ?? []).map((tier: any) => {
               const total = (cleanerDistribution ?? []).reduce(
-                (sum: number, t: { count: number }) => sum + t.count,
+                (sum: number, t: any) => sum + t.count,
                 0
               );
               const pct = total > 0 ? (tier.count / total) * 100 : 0;
@@ -124,10 +132,10 @@ function Dashboard() {
             })}
           </div>
           <div className="flex justify-between mt-2 text-xs text-gray-500">
-            <span>⬤ Excellent (90+)</span>
-            <span>⬤ Good (75-89)</span>
-            <span>⬤ Fair (50-74)</span>
-            <span>⬤ Poor (&lt;50)</span>
+            <span>{"⬤ Excellent (90+)"}</span>
+            <span>{"⬤ Good (75-89)"}</span>
+            <span>{"⬤ Fair (50-74)"}</span>
+            <span>{"⬤ Poor (<50)"}</span>
           </div>
         </div>
       </section>
@@ -168,6 +176,83 @@ function Dashboard() {
   );
 }
 
+function AlertCard({ alert, variant }: { alert: any; variant: "high_risk" | "pending" | "backup" }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function triggerBackup() {
+    setBusy("backup"); setMsg(null);
+    try {
+      const r = await deployBackup({ data: { job_id: alert.id } });
+      setMsg(r.success ? "✓ Backup deployed!" : r.error ?? "Failed");
+    } catch { setMsg("Error deploying backup"); }
+    setBusy(null);
+  }
+
+  async function sendReminder() {
+    setBusy("reminder"); setMsg(null);
+    try {
+      const r = await sendJobReminders({ data: { job_id: alert.id } });
+      setMsg(r.sent ? "✓ Reminder sent!" : "No phone on file");
+    } catch { setMsg("Error sending reminder"); }
+    setBusy(null);
+  }
+
+  const bg = variant === "high_risk" ? "bg-orange-50 border-orange-300"
+    : variant === "backup" ? "bg-orange-50 border-orange-200"
+    : "bg-red-50 border-red-200";
+
+  const textColor = variant === "high_risk" ? "text-orange-700"
+    : variant === "backup" ? "text-orange-700"
+    : "text-red-700";
+
+  return (
+    <div className={`rounded-xl border p-3 ${bg}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium capitalize">{alert.title}</div>
+          <div className={`text-xs mt-0.5 ${textColor}`}>
+            {variant === "high_risk" && (
+              <span>{"🟠 Pre-flight not confirmed — "}{alert.cleaner_name || "Unassigned"}</span>
+            )}
+            {variant === "backup" && (
+              <span>{"🔄 Backup deployed: "}{alert.backup_name}</span>
+            )}
+            {variant === "pending" && (
+              <span>{"⏰ Past deadline — "}{alert.cleaner_name || "Unassigned"}{" hasn't confirmed"}</span>
+            )}
+          </div>
+          {msg && <div className="text-xs mt-1 font-medium text-green-700">{msg}</div>}
+        </div>
+        <div className="flex gap-1.5 flex-shrink-0">
+          {alert.cleaner_phone && (
+            <a
+              href={`tel:${alert.cleaner_phone}`}
+              className="px-2.5 py-1.5 text-xs font-medium bg-white border rounded-lg hover:bg-gray-50 whitespace-nowrap"
+            >
+              {"📞 Call"}
+            </a>
+          )}
+          <button
+            onClick={triggerBackup}
+            disabled={busy === "backup"}
+            className="px-2.5 py-1.5 text-xs font-medium bg-white border rounded-lg hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap"
+          >
+            {busy === "backup" ? "..." : "⚡ Backup"}
+          </button>
+          <button
+            onClick={sendReminder}
+            disabled={busy === "reminder"}
+            className="px-2.5 py-1.5 text-xs font-medium bg-white border rounded-lg hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap"
+          >
+            {busy === "reminder" ? "..." : "💬 SMS"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -175,18 +260,19 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  color: "blue" | "green" | "yellow" | "indigo" | "red";
+  color: "blue" | "green" | "yellow" | "indigo" | "red" | "orange";
 }) {
-  const colorMap = {
-    blue: "bg-blue-50 text-blue-700 border-blue-200",
-    green: "bg-green-50 text-green-700 border-green-200",
-    yellow: "bg-yellow-50 text-yellow-700 border-yellow-200",
-    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    red: "bg-red-50 text-red-700 border-red-200",
+  const colorMap: Record<string, string> = {
+    blue: "bg-blue-100 text-blue-800 border-blue-300",
+    green: "bg-green-100 text-green-800 border-green-300",
+    yellow: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    indigo: "bg-indigo-100 text-indigo-800 border-indigo-300",
+    red: "bg-red-100 text-red-800 border-red-300",
+    orange: "bg-orange-100 text-orange-800 border-orange-300",
   };
   return (
-    <div className={`rounded-xl border px-4 py-3 text-center ${colorMap[color]}`}>
-      <div className="text-2xl font-bold">{value}</div>
+    <div className={`rounded-xl border px-3 py-3 text-center ${colorMap[color]}`}>
+      <div className="text-2xl font-extrabold">{value}</div>
       <div className="text-xs font-medium mt-0.5">{label}</div>
     </div>
   );

@@ -25,8 +25,14 @@ export interface CleanerInput {
 export const listCleaners = createServerFn({ method: "GET" }).handler(
   async (): Promise<Cleaner[]> => {
     const rows = await sql()`SELECT * FROM cleaners ORDER BY name`;
-    return rows.map((r) => ({
-      ...r,
+    return rows.map((r: any) => ({
+      id: String(r.id),
+      name: String(r.name),
+      phone: r.phone ? String(r.phone) : null,
+      email: r.email ? String(r.email) : null,
+      reliability_score: Number(r.reliability_score),
+      points_balance: Number(r.points_balance),
+      is_active: Boolean(r.is_active),
       created_at: String(r.created_at),
     }));
   }
@@ -39,8 +45,17 @@ export const getCleaner = createServerFn({ method: "GET" })
   .handler(async ({ data: id }): Promise<Cleaner | null> => {
     const rows = await sql()`SELECT * FROM cleaners WHERE id = ${id}`;
     if (rows.length === 0) return null;
-    const r = rows[0];
-    return { ...r, created_at: String(r.created_at) };
+    const r = rows[0] as any;
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      phone: r.phone ? String(r.phone) : null,
+      email: r.email ? String(r.email) : null,
+      reliability_score: Number(r.reliability_score),
+      points_balance: Number(r.points_balance),
+      is_active: Boolean(r.is_active),
+      created_at: String(r.created_at),
+    };
   });
 
 // ── Create cleaner ───────────────────────────────────────────────

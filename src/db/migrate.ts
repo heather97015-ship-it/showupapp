@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { neon } from "@neondatabase/serverless";
+import { sql } from "../db";
 
 /**
  * Run all pending migrations in src/db/migrations/.
@@ -8,10 +8,7 @@ import { neon } from "@neondatabase/serverless";
  * Tracks applied migrations in a `_migrations` table so each runs at most once.
  */
 export async function migrate() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL not set");
-
-  const client = neon(url);
+  const client = sql();
 
   // Ensure the migration tracking table exists
   await client`CREATE TABLE IF NOT EXISTS _migrations (
@@ -38,11 +35,18 @@ export async function migrate() {
     console.log(`Applying migration: ${file}`);
     const sqlContent = await readFile(join(migrationsDir, file), "utf8");
 
-    // Split by semicolons, skip comments and empty lines
-    const statements = sqlContent
+    // Remove SQL comments line-by-line first
+    const cleanLines = sqlContent.split("\n").map((line) => {
+      const idx = line.indexOf("--");
+      return idx >= 0 ? line.slice(0, idx) : line;
+    });
+    const cleanSql = cleanLines.join("\n");
+
+    // Split by semicolons and trim
+    const statements = cleanSql
       .split(";")
       .map((s) => s.trim())
-      .filter((s) => s.length > 0 && !s.startsWith("--"));
+      .filter((s) => s.length > 0);
 
     // Run each statement individually
     for (const stmt of statements) {

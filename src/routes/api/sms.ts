@@ -1,5 +1,5 @@
 import { createAPIFileRoute } from "@tanstack/react-start/api";
-import { neon } from "@neondatabase/serverless";
+import { sql } from "../../db";
 
 /**
  * Twilio SMS webhook handler.
@@ -9,15 +9,15 @@ import { neon } from "@neondatabase/serverless";
  */
 export const APIRoute = createAPIFileRoute("/api/sms")({
   POST: async ({ request }) => {
-    const url = process.env.DATABASE_URL;
-    if (!url) {
+    let db;
+    try {
+      db = sql();
+    } catch (err) {
       return new Response(
         '<?xml version="1.0" encoding="UTF-8"?><Response><Message>System unavailable</Message></Response>',
         { status: 500, headers: { "Content-Type": "text/xml" } }
       );
     }
-
-    const db = neon(url);
 
     try {
       // Twilio sends form-encoded body

@@ -8,11 +8,12 @@ export const Route = createFileRoute("/jobs/")({
 });
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-100 text-yellow-700 border-yellow-200",
-  confirmed: "bg-green-100 text-green-700 border-green-200",
-  in_progress: "bg-indigo-100 text-indigo-700 border-indigo-200",
-  completed: "bg-gray-100 text-gray-700 border-gray-200",
-  no_show: "bg-red-100 text-red-700 border-red-200",
+  pending: "bg-amber-500 text-white",
+  confirmed: "bg-green-600 text-white",
+  in_progress: "bg-indigo-600 text-white",
+  completed: "bg-slate-600 text-white",
+  no_show: "bg-red-600 text-white",
+  high_risk: "bg-orange-600 text-white",
 };
 
 function JobsList() {
@@ -25,7 +26,7 @@ function JobsList() {
   const upcomingJobs = filtered.filter((j) => j.scheduled_date > today);
   const pastJobs = filtered.filter((j) => j.scheduled_date < today);
 
-  const statuses = ["all", "pending", "confirmed", "in_progress", "completed", "no_show"];
+  const statuses = ["all", "pending", "confirmed", "in_progress", "completed", "no_show", "high_risk"];
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">

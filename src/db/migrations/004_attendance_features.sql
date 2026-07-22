@@ -5,7 +5,7 @@ ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS pre_flight_sent_at TIMESTAM
 ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS pre_flight_confirmed BOOLEAN NOT NULL DEFAULT false;
 
 -- Add high_risk to job_status enum
-ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'high_risk';
+ALTER TYPE job_status ADD VALUE 'high_risk';
 
 -- Geofence fields on jobs
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS latitude DECIMAL(10,7);
